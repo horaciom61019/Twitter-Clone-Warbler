@@ -1,10 +1,11 @@
 import os
+from xml.sax import default_parser_list
 
 from flask import Flask, render_template, request, flash, redirect, session, g
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
-from forms import UserAddForm, LoginForm, MessageForm
+from forms import UserAddForm, LoginForm, MessageForm, EditProfileForm
 from models import db, connect_db, User, Message
 
 CURR_USER_KEY = "curr_user"
@@ -18,7 +19,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ECHO'] = False
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 toolbar = DebugToolbarExtension(app)
 
@@ -26,9 +27,19 @@ connect_db(app)
 
 
 ##############################################################################
+# Global Variables
+
+default_profile_pic = "/static/images/default-pic.png"
+default_hero = "/static/images/warbler-hero.jpg"
+
+
+
+##############################################################################
 # User signup/login/logout
 
-
+# before_request decorator allows us to create a function that will run before each request.
+# g is an object provided by Flask. It is a global namespace for holding any data you want 
+# during a single app context. 
 @app.before_request
 def add_user_to_g():
     """If we're logged in, add curr user to Flask global."""
@@ -113,7 +124,9 @@ def login():
 def logout():
     """Handle logout of user."""
 
-    # IMPLEMENT THIS
+    do_logout()
+    flash("Successfully logged out", "success")
+    return redirect('/login')
 
 
 ##############################################################################
@@ -210,8 +223,30 @@ def stop_following(follow_id):
 @app.route('/users/profile', methods=["GET", "POST"])
 def profile():
     """Update profile for current user."""
+    
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
 
-    # IMPLEMENT THIS
+    user = g.user
+    form = EditProfileForm(obj=user)
+
+    if form.validate_on_submit():
+        if User.authenticate(user.username, form.password.data):
+
+            user.username = form.username.data
+            user.email = form.email.data
+            user.image_url = form.image_url.data or default_profile_pic
+            user.header_image_url = form.header_image_url.data or default_hero
+            user.bio = form.bio.data
+
+            db.session.commit()
+            return redirect(f'/users/{user.id}')
+
+        flash("Incorrect password, please try again.", 'danger') 
+
+    return render_template('users/edit.html', form=form, user_id=user.id)
+    
 
 
 @app.route('/users/delete', methods=["POST"])
@@ -292,8 +327,10 @@ def homepage():
     """
 
     if g.user:
+        following_ids = [f.id for f in g.user.following] + [g.user.id]
         messages = (Message
                     .query
+                    .filter(Message.user_id.in_(following_ids))
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
